@@ -1,0 +1,101 @@
+name: Build LUCIA AI Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/android-apk.yml'
+      - '*.zip'
+      - '**/*.zip'
+      - 'package.json'
+      - 'capacitor.config.*'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Extract project archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP_FILE="$(find . -maxdepth 1 -type f -name 'LUCIA_AI_Android_v0.8_build-cloud*.zip' | sort | head -n 1)"
+          if [ -z "$ZIP_FILE" ]; then
+            echo '::error::LUCIA AI V0.8 ZIP archive not found at repository root.'
+            exit 1
+          fi
+          mkdir -p extracted
+          unzip -q "$ZIP_FILE" -d extracted
+          GRADLE_FILE="$(find extracted -type f \( -name build.gradle -o -name build.gradle.kts \) -path '*/app/*' -print -quit)"
+          WRAPPER="$(find extracted -type f -name gradlew -print -quit)"
+          if [ -n "$GRADLE_FILE" ] && [ -n "$WRAPPER" ]; then
+            ROOT="$(dirname "$WRAPPER")"
+            echo "PROJECT_ROOT=$ROOT" >> "$GITHUB_ENV"
+            echo 'BUILD_MODE=native' >> "$GITHUB_ENV"
+          else
+            PACKAGE="$(find extracted -type f -name package.json -not -path '*/node_modules/*' -print -quit)"
+            if [ -z "$PACKAGE" ]; then
+              echo '::error::Archive does not contain a Gradle Android project or package.json.'
+              exit 1
+            fi
+            echo "PROJECT_ROOT=$(dirname "$PACKAGE")" >> "$GITHUB_ENV"
+            echo 'BUILD_MODE=capacitor' >> "$GITHUB_ENV"
+          fi
+
+      - name: Install dependencies and prepare Capacitor Android
+        if: env.BUILD_MODE == 'capacitor'
+        working-directory: ${{ env.PROJECT_ROOT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+          npm run build --if-present
+          if [ ! -f capacitor.config.ts ] && [ ! -f capacitor.config.js ] && [ ! -f capacitor.config.json ]; then
+            if [ -f dist/index.html ]; then WEB_DIR=dist
+            elif [ -f build/index.html ]; then WEB_DIR=build
+            elif [ -f www/index.html ]; then WEB_DIR=www
+            elif [ -f index.html ]; then WEB_DIR=.
+            else echo '::error::No web index.html found after npm build.'; exit 1; fi
+            printf '{ "appId": "fr.lucia.ai", "appName": "LUCIA AI", "webDir": "%s" }\n' "$WEB_DIR" > capacitor.config.json
+          fi
+          npm install @capacitor/core@^7 @capacitor/android@^7
+          npm install --save-dev @capacitor/cli@^7
+          if [ ! -d android ]; then npx cap add android; fi
+          npx cap sync android
+
+      - name: Build APKs
+        working-directory: ${{ env.PROJECT_ROOT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f ./gradlew ]; then echo '::error::Gradle wrapper missing from Android project.'; exit 1; fi
+          chmod +x ./gradlew
+          ./gradlew --no-daemon assembleDebug assembleRelease
+
+      - name: Upload APK artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: LUCIA-Android-APKs
+          path: |
+            ${{ env.PROJECT_ROOT }}/app/build/outputs/apk/debug/*.apk
+            ${{ env.PROJECT_ROOT }}/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 14
