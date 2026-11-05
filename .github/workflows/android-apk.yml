@@ -1,4 +1,48 @@
 
+      - name: Preparer Capacitor
+        if: env.BUILD_MODE == 'capacitor'
+        working-directory: ${{ env.PROJECT_ROOT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install
+          npm run build --if-present
+
+          if [ -f dist/index.html ]; then
+            WEB_SOURCE=dist
+          elif [ -f build/index.html ]; then
+            WEB_SOURCE=build
+          elif [ -f www/index.html ]; then
+            WEB_SOURCE=www
+          elif [ -f index.html ]; then
+            WEB_SOURCE=.
+          else
+            echo "Aucun index.html trouve"
+            exit 1
+          fi
+
+          if [ "$WEB_SOURCE" != "www" ]; then
+            mkdir -p www
+            if [ "$WEB_SOURCE" = "." ]; then
+              find . -mindepth 1 -maxdepth 1 \
+                ! -name www ! -name node_modules ! -name android ! -name .git \
+                -exec cp -a {} www/ \;
+            else
+              cp -a "$WEB_SOURCE"/. www/
+            fi
+          fi
+
+          printf '{ "appId": "fr.lucia.ai", "appName": "LUCIA AI", "webDir": "www" }\n' > capacitor.config.json
+
+          npm install @capacitor/core@^7 @capacitor/android@^7
+          npm install --save-dev @capacitor/cli@^7
+
+          if [ ! -d android ]; then
+            npx cap add android
+          fi
+
+          npx cap sync android
+
 name: Build LUCIA AI Android APK
 
 on:
