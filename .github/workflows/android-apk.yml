@@ -126,6 +126,7 @@ jobs:
         run: |
           set -euo pipefail
           cd "$PROJECT_ROOT/android"
+          gradle --no-daemon --stacktrace assembleDebug assembleRelease
 
           if [ -f ./gradlew ]; then
             chmod +x ./gradlew
