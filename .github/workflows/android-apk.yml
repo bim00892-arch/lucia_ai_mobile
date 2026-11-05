@@ -124,12 +124,16 @@ jobs:
       - name: Build Android APKs
         shell: bash
         run: |
-          set -euo pipefai
+          set -euo pipefail
+          cd "$PROJECT_ROOT/android"
+
           if [ -f ./gradlew ]; then
             chmod +x ./gradlew
             ./gradlew --no-daemon --stacktrace assembleDebug assembleRelease
           else
-            gradle --no-daemon --stacktrace assembleDebug assembleRelease
+            echo "::error::Le wrapper Gradle est absent du dossier Android."
+            ls -la
+            exit 1
           fi
 
           chmod +x ./gradlew
