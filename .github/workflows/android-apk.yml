@@ -1,1 +1,111 @@
 
+name: Build LUCIA AI Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Recuperer le depot
+        uses: actions/checkout@v4
+
+      - name: Installer Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Installer Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Extraire le projet LUCIA AI
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP_FILE=$(find . -maxdepth 1 -name 'LUCIA_AI_Android_v0.8_build-cloud*.zip' | head -n 1)
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "Archive LUCIA AI introuvable"
+            exit 1
+          fi
+
+          mkdir extracted
+          unzip -q "$ZIP_FILE" -d extracted
+
+          ANDROID_ROOT=$(find extracted -type f -name gradlew -print -quit | xargs -r dirname)
+
+          if [ -n "$ANDROID_ROOT" ] && [ -f "$ANDROID_ROOT/app/build.gradle" -o -f "$ANDROID_ROOT/app/build.gradle.kts" ]; then
+            echo "PROJECT_ROOT=$ANDROID_ROOT" >> "$GITHUB_ENV"
+            echo "BUILD_MODE=native" >> "$GITHUB_ENV"
+          else
+            PACKAGE_FILE=$(find extracted -type f -name package.json -not -path '*/node_modules/*' -print -quit)
+
+            if [ -z "$PACKAGE_FILE" ]; then
+              echo "Projet Android ou package.json introuvable"
+              exit 1
+            fi
+
+            echo "PROJECT_ROOT=$(dirname "$PACKAGE_FILE")" >> "$GITHUB_ENV"
+            echo "BUILD_MODE=capacitor" >> "$GITHUB_ENV"
+          fi
+
+      - name: Preparer Capacitor
+        if: env.BUILD_MODE == 'capacitor'
+        working-directory: ${{ env.PROJECT_ROOT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install
+          npm run build --if-present
+
+          if [ ! -f capacitor.config.json ] && [ ! -f capacitor.config.ts ] && [ ! -f capacitor.config.js ]; then
+            if [ -f dist/index.html ]; then WEB_DIR=dist
+            elif [ -f build/index.html ]; then WEB_DIR=build
+            elif [ -f www/index.html ]; then WEB_DIR=www
+            elif [ -f index.html ]; then WEB_DIR=.
+            else
+              echo "Aucun index.html trouve pour l'application"
+              exit 1
+            fi
+
+            printf '{ "appId": "fr.lucia.ai", "appName": "LUCIA AI", "webDir": "%s" }\n' "$WEB_DIR" > capacitor.config.json
+          fi
+
+          npm install @capacitor/core@^7 @capacitor/android@^7
+          npm install --save-dev @capacitor/cli@^7
+
+          if [ ! -d android ]; then
+            npx cap add android
+          fi
+
+          npx cap sync android
+
+      - name: Compiler les APK Android
+        working-directory: ${{ env.PROJECT_ROOT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+          ./gradlew --no-daemon assembleDebug assembleRelease
+
+      - name: Publier les APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: LUCIA-AI-APK
+          path: |
+            ${{ env.PROJECT_ROOT }}/app/build/outputs/apk/debug/*.apk
+            ${{ env.PROJECT_ROOT }}/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
