@@ -1,47 +1,4 @@
 
-      - name: Preparer Capacitor
-        if: env.BUILD_MODE == 'capacitor'
-        working-directory: ${{ env.PROJECT_ROOT }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm install
-          npm run build --if-present
-
-          if [ -f dist/index.html ]; then
-            WEB_SOURCE=dist
-          elif [ -f build/index.html ]; then
-            WEB_SOURCE=build
-          elif [ -f www/index.html ]; then
-            WEB_SOURCE=www
-          elif [ -f index.html ]; then
-            WEB_SOURCE=.
-          else
-            echo "Aucun index.html trouve"
-            exit 1
-          fi
-
-          if [ "$WEB_SOURCE" != "www" ]; then
-            mkdir -p www
-            if [ "$WEB_SOURCE" = "." ]; then
-              find . -mindepth 1 -maxdepth 1 \
-                ! -name www ! -name node_modules ! -name android ! -name .git \
-                -exec cp -a {} www/ \;
-            else
-              cp -a "$WEB_SOURCE"/. www/
-            fi
-          fi
-
-          printf '{ "appId": "fr.lucia.ai", "appName": "LUCIA AI", "webDir": "www" }\n' > capacitor.config.json
-
-          npm install @capacitor/core@^7 @capacitor/android@^7
-          npm install --save-dev @capacitor/cli@^7
-
-          if [ ! -d android ]; then
-            npx cap add android
-          fi
-
-          npx cap sync android
 
 name: Build LUCIA AI Android APK
 
@@ -56,100 +13,129 @@ permissions:
 
 jobs:
   build:
+    name: Build Android APK
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
-      - name: Recuperer le depot
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Installer Java
+      - name: Set up Java 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
 
-      - name: Installer Node.js
+      - name: Set up Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Extraire le projet LUCIA AI
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
         shell: bash
         run: |
           set -euo pipefail
-          ZIP_FILE=$(find . -maxdepth 1 -name 'LUCIA_AI_Android_v0.8_build-cloud*.zip' | head -n 1)
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
+      - name: Extract LUCIA AI project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ZIP_FILE="$(find . -maxdepth 1 -type f -name 'LUCIA_AI_Android_v0.8_build-cloud*.zip' -print -quit)"
           if [ -z "$ZIP_FILE" ]; then
-            echo "Archive LUCIA AI introuvable"
+            echo "::error::Archive LUCIA AI introuvable."
             exit 1
           fi
 
-          mkdir extracted
+          mkdir -p extracted
           unzip -q "$ZIP_FILE" -d extracted
 
-          ANDROID_ROOT=$(find extracted -type f -name gradlew -print -quit | xargs -r dirname)
-
-          if [ -n "$ANDROID_ROOT" ] && [ -f "$ANDROID_ROOT/app/build.gradle" -o -f "$ANDROID_ROOT/app/build.gradle.kts" ]; then
-            echo "PROJECT_ROOT=$ANDROID_ROOT" >> "$GITHUB_ENV"
-            echo "BUILD_MODE=native" >> "$GITHUB_ENV"
-          else
-            PACKAGE_FILE=$(find extracted -type f -name package.json -not -path '*/node_modules/*' -print -quit)
-
-            if [ -z "$PACKAGE_FILE" ]; then
-              echo "Projet Android ou package.json introuvable"
-              exit 1
+          GRADLE_FILE="$(find extracted -type f -name gradlew -not -path '*/node_modules/*' -not -path '*/.gradle/*' -print -quit)"
+          if [ -n "$GRADLE_FILE" ]; then
+            ANDROID_ROOT="$(dirname "$GRADLE_FILE")"
+            if [ -f "$ANDROID_ROOT/app/build.gradle" ] || [ -f "$ANDROID_ROOT/app/build.gradle.kts" ]; then
+              echo "PROJECT_ROOT=$ANDROID_ROOT" >> "$GITHUB_ENV"
+              echo "BUILD_MODE=native" >> "$GITHUB_ENV"
+              echo "APK_DIR=$ANDROID_ROOT/app/build/outputs/apk" >> "$GITHUB_ENV"
+              exit 0
             fi
-
-            echo "PROJECT_ROOT=$(dirname "$PACKAGE_FILE")" >> "$GITHUB_ENV"
-            echo "BUILD_MODE=capacitor" >> "$GITHUB_ENV"
           fi
 
-      - name: Preparer Capacitor
+          PACKAGE_FILE="$(find extracted -type f -name package.json -not -path '*/node_modules/*' -not -path '*/.git/*' -print -quit)"
+          if [ -z "$PACKAGE_FILE" ]; then
+            echo "::error::Projet Android ou package.json introuvable."
+            exit 1
+          fi
+
+          PROJECT_ROOT="$(dirname "$PACKAGE_FILE")"
+          echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$GITHUB_ENV"
+          echo "BUILD_MODE=capacitor" >> "$GITHUB_ENV"
+          echo "APK_DIR=$PROJECT_ROOT/android/app/build/outputs/apk" >> "$GITHUB_ENV"
+
+      - name: Prepare Capacitor Android project
         if: env.BUILD_MODE == 'capacitor'
-        working-directory: ${{ env.PROJECT_ROOT }}
         shell: bash
         run: |
           set -euo pipefail
+          cd "$PROJECT_ROOT"
+
           npm install
           npm run build --if-present
 
-          if [ ! -f capacitor.config.json ] && [ ! -f capacitor.config.ts ] && [ ! -f capacitor.config.js ]; then
-            if [ -f dist/index.html ]; then WEB_DIR=dist
-            elif [ -f build/index.html ]; then WEB_DIR=build
-            elif [ -f www/index.html ]; then WEB_DIR=www
-            elif [ -f index.html ]; then WEB_DIR=.
-            else
-              echo "Aucun index.html trouve pour l'application"
-              exit 1
-            fi
-
-            printf '{ "appId": "fr.lucia.ai", "appName": "LUCIA AI", "webDir": "%s" }\n' "$WEB_DIR" > capacitor.config.json
+          if [ -f dist/index.html ]; then
+            WEB_DIR="dist"
+          elif [ -f build/index.html ]; then
+            WEB_DIR="build"
+          elif [ -f www/index.html ]; then
+            WEB_DIR="www"
+          elif [ -f index.html ]; then
+            WEB_DIR="www"
+            mkdir -p www
+            find . -mindepth 1 -maxdepth 1 \
+              ! -name www ! -name node_modules ! -name android ! -name .git \
+              -exec cp -a {} www/ \;
+          else
+            echo "::error::Aucun index.html trouvé."
+            exit 1
           fi
 
           npm install @capacitor/core@^7 @capacitor/android@^7
           npm install --save-dev @capacitor/cli@^7
 
+          rm -f capacitor.config.ts capacitor.config.js capacitor.config.mjs
+          printf '{ "appId": "fr.lucia.ai", "appName": "LUCIA AI", "webDir": "%s" }\n' "$WEB_DIR" > capacitor.config.json
+
           if [ ! -d android ]; then
             npx cap add android
           fi
-
           npx cap sync android
 
-      - name: Compiler les APK Android
-        working-directory: ${{ env.PROJECT_ROOT }}
+      - name: Build Android APKs
         shell: bash
         run: |
           set -euo pipefail
-          chmod +x ./gradlew
-          ./gradlew --no-daemon assembleDebug assembleRelease
+          if [ "$BUILD_MODE" = "native" ]; then
+            cd "$PROJECT_ROOT"
+          else
+            cd "$PROJECT_ROOT/android"
+          fi
 
-      - name: Publier les APK
+          chmod +x ./gradlew
+          ./gradlew --no-daemon --stacktrace assembleDebug assembleRelease
+
+      - name: Upload Android APKs
         uses: actions/upload-artifact@v4
         with:
           name: LUCIA-AI-APK
           path: |
-            ${{ env.PROJECT_ROOT }}/app/build/outputs/apk/debug/*.apk
-            ${{ env.PROJECT_ROOT }}/app/build/outputs/apk/release/*.apk
+            ${{ env.APK_DIR }}/debug/*.apk
+            ${{ env.APK_DIR }}/release/*.apk
           if-no-files-found: error
           retention-days: 14
 
