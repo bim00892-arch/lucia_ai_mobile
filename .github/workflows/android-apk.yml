@@ -128,18 +128,6 @@ jobs:
           cd "$PROJECT_ROOT/android"
           gradle --no-daemon --stacktrace assembleDebug assembleRelease
 
-          if [ -f ./gradlew ]; then
-            chmod +x ./gradlew
-            ./gradlew --no-daemon --stacktrace assembleDebug assembleRelease
-          else
-            echo "::error::Le wrapper Gradle est absent du dossier Android."
-            ls -la
-            exit 1
-          fi
-
-          chmod +x ./gradlew
-          ./gradlew --no-daemon --stacktrace assembleDebug assembleRelease
-
       - name: Upload Android APKs
         uses: actions/upload-artifact@v4
         with:
