@@ -124,11 +124,12 @@ jobs:
       - name: Build Android APKs
         shell: bash
         run: |
-          set -euo pipefail
-          if [ "$BUILD_MODE" = "native" ]; then
-            cd "$PROJECT_ROOT"
+          set -euo pipefai
+          if [ -f ./gradlew ]; then
+            chmod +x ./gradlew
+            ./gradlew --no-daemon --stacktrace assembleDebug assembleRelease
           else
-            cd "$PROJECT_ROOT/android"
+            gradle --no-daemon --stacktrace assembleDebug assembleRelease
           fi
 
           chmod +x ./gradlew
